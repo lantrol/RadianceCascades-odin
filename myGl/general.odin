@@ -281,11 +281,13 @@ render :: proc(rend: Renderable) {
 	gl.DrawArrays(rend.mode, 0, rend.mesh.vertAmount)
 }
 
-renderMesh :: proc(mesh: Mesh, shader: u32, texture: Texture) {
+renderMesh :: proc(mesh: Mesh, shader: u32, texture: Texture = {}, mode: u32 = gl.TRIANGLE_STRIP) {
 	gl.UseProgram(shader)
 	gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, 0, mesh.ssbo)
-	gl.BindTextureUnit(0, texture.id)
-	gl.DrawArrays(gl.TRIANGLE_STRIP, 0, mesh.vertAmount)
+	if texture != {} {
+	    gl.BindTextureUnit(0, texture.id)
+	}
+	gl.DrawArrays(mode, 0, mesh.vertAmount)
 }
 
 createQuadFS :: proc() -> (mesh: Mesh) {

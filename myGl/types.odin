@@ -1,9 +1,23 @@
+#+feature dynamic-literals
 package MyGl
+
 
 import "core:fmt"
 import glm "core:math/linalg/glsl"
-import gl "vendor:OpenGL"
 import "core:strings"
+import gl "vendor:OpenGL"
+
+typeSizes: map[u32]i32 = map[u32]i32 {
+	gl.UNSIGNED_BYTE  = 1,
+	gl.UNSIGNED_SHORT = 2,
+	gl.UNSIGNED_INT   = 4,
+	gl.BYTE           = 1,
+	gl.SHORT          = 2,
+	gl.INT            = 4,
+	gl.HALF_FLOAT     = 2,
+	gl.FLOAT          = 4,
+	gl.DOUBLE         = 8,
+}
 
 getTypeSize :: proc(type: u32) -> (size: i32, ok: bool) {
 	switch type {

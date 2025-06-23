@@ -2,9 +2,9 @@ package MyGl
 
 import "core:fmt"
 import glm "core:math/linalg/glsl"
-import gl "vendor:OpenGL"
-import "core:strings"
 import "core:slice"
+import "core:strings"
+import gl "vendor:OpenGL"
 import sdl "vendor:sdl3"
 
 Vertex :: struct {
@@ -13,19 +13,19 @@ Vertex :: struct {
 }
 
 Mesh :: struct {
-	ssbo: 		u32,
-	vertAmount: i32
+	ssbo:       u32,
+	vertAmount: i32,
 }
 
 Material :: struct {
-	shader: 	u32,
-	texture: 	Texture,
+	shader:  u32,
+	texture: Texture,
 }
 
 Renderable :: struct {
-	mesh: 		Mesh,
-	material: 	Material,
-	mode: 		u32
+	mesh:     Mesh,
+	material: Material,
+	mode:     u32,
 }
 
 // Geometry :: struct {
@@ -36,22 +36,15 @@ Renderable :: struct {
 // 	texture: 	Texture,
 // }
 
-Texture :: struct {
-	id:             u32,
-	width:          i32,
-	height:         i32,
-	internalformat: u32,
-}
-
 Window :: struct {
-	window: ^sdl.Window,
-	gl_context: ^sdl.GLContextState
-
+	window:     ^sdl.Window,
+	gl_context: ^sdl.GLContextState,
 }
 
-Program :: struct { // Not really used
-	id: u32,
-	vao: u32
+Program :: struct {
+	// Not really used
+	id:  u32,
+	vao: u32,
 }
 
 windowInit :: proc(width, height, GLmajor, GLminor: i32) -> (win: Window, ok: bool) {
@@ -80,109 +73,16 @@ windowDelete :: proc(win: ^Window) {
 	win^ = {}
 }
 
-createTexture2D :: proc(
-	width, height: i32,
-	internalformat: u32 = gl.RGBA8,
-	wrap: i32 = gl.REPEAT,
-	filter: i32 = gl.NEAREST,
-) -> (
-	texture: Texture,
-) {
-	gl.CreateTextures(gl.TEXTURE_2D, 1, &texture.id)
-
-	gl.TextureParameteri(texture.id, gl.TEXTURE_WRAP_S, wrap)
-	gl.TextureParameteri(texture.id, gl.TEXTURE_WRAP_T, wrap)
-	gl.TextureParameteri(texture.id, gl.TEXTURE_MIN_FILTER, filter)
-	gl.TextureParameteri(texture.id, gl.TEXTURE_MAG_FILTER, filter)
-
-	gl.TextureStorage2D(texture.id, 1, internalformat, width, height)
-
-	texture.internalformat = internalformat
-	texture.width = width
-	texture.height = height
-	return texture
-}
-
-writeTexture2D :: proc(texture: Texture, data: []$T, components: u32, width, height: i32) {
-	format, type: u32
-
-	switch typeid_of(T) {
-	case u8:
-		type = gl.UNSIGNED_BYTE
-	case u16:
-		type = gl.UNSIGNED_SHORT
-	case u32:
-		type = gl.UNSIGNED_INT
-	case i8:
-		type = gl.BYTE
-	case i16:
-		type = gl.SHORT
-	case i32:
-		type = gl.INT
-	case f16:
-		type = gl.HALF_FLOAT
-	case f32:
-		type = gl.FLOAT
-	case f64:
-		type = gl.DOUBLE
-	case:
-		fmt.eprintln("ERROR: Tipo de dato inválido")
-		return
-	}
-
-	switch components {
-	case 1:
-		format = gl.RED
-	case 2:
-		format = gl.RG
-	case 3:
-		format = gl.RGB
-	case 4:
-		format = gl.RGBA
-	case:
-		fmt.eprintln("ERROR: Numero de componentes inválido")
-		return
-	}
-
-	if data != nil {
-		gl.TextureSubImage2D(
-			texture.id,
-			0,
-			0,
-			0,
-			width,
-			height,
-			format,
-			type,
-			raw_data(data),
-		)
-	}
-}
-
-bindImage :: proc(unit: u32, texture: Texture, use: enum{READ, WRITE}) {
-	gl_use : u32 = gl.READ_ONLY if use == .READ else gl.WRITE_ONLY
-	gl.BindImageTexture(unit, texture.id, 0, false, 0, gl_use, texture.internalformat)
-}
-
-bindTexture :: proc(unit: u32, texture: Texture) {
-	gl.BindTextureUnit(unit, texture.id)
-}
-
 createBuffer :: proc(data: []$T, usage: u32 = gl.STATIC_DRAW) -> (vbo: u32) {
 	gl.CreateBuffers(1, &vbo)
-	gl.NamedBufferData(
-		vbo,
-		size_of(data[0]) * len(data),
-		raw_data(slice.to_bytes(data)),
-		usage,
-	)
+	gl.NamedBufferData(vbo, size_of(data[0]) * len(data), raw_data(slice.to_bytes(data)), usage)
 	return vbo
 }
 
 bindAttributes :: proc(program: Program, vbo: u32, attributes: []struct {
-		type: u32,
+		type:   u32,
 		amount: i32,
-		name: string,
+		name:   string,
 	}) -> (ok: bool) {
 
 	offset: i32 = 0
@@ -205,7 +105,7 @@ bindAttributes :: proc(program: Program, vbo: u32, attributes: []struct {
 			attribute.amount,
 			attribute.type,
 			false,
-			u32(offset * typeSize)
+			u32(offset * typeSize),
 		)
 		offset += attribute.amount
 	}
@@ -258,12 +158,7 @@ bindAttributes :: proc(program: Program, vbo: u32, attributes: []struct {
 createMesh :: proc(data: []$T, usage: u32 = gl.DYNAMIC_STORAGE_BIT) -> (mesh: Mesh) {
 	ssbo: u32
 	gl.CreateBuffers(1, &ssbo)
-	gl.NamedBufferStorage(
-		ssbo,
-		size_of(data[0]) * len(data),
-		raw_data(data),
-		usage,
-	)
+	gl.NamedBufferStorage(ssbo, size_of(data[0]) * len(data), raw_data(data), usage)
 	mesh.ssbo = ssbo
 	mesh.vertAmount = i32(len(data))
 	return mesh
@@ -285,7 +180,7 @@ renderMesh :: proc(mesh: Mesh, shader: u32, texture: Texture = {}, mode: u32 = g
 	gl.UseProgram(shader)
 	gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, 0, mesh.ssbo)
 	if texture != {} {
-	    gl.BindTextureUnit(0, texture.id)
+		gl.BindTextureUnit(0, texture.id)
 	}
 	gl.DrawArrays(mode, 0, mesh.vertAmount)
 }
@@ -303,9 +198,16 @@ createQuadFS :: proc() -> (mesh: Mesh) {
 	return mesh
 }
 
-createRenderable :: proc{createRenderableMeshMaterial, createRenderableMeshShaderTexture}
+createRenderable :: proc {
+	createRenderableMeshMaterial,
+	createRenderableMeshShaderTexture,
+}
 
-createRenderableMeshMaterial :: proc(mesh: Mesh, material: Material, mode: u32 = gl.TRIANGLE_STRIP) -> Renderable {
+createRenderableMeshMaterial :: proc(
+	mesh: Mesh,
+	material: Material,
+	mode: u32 = gl.TRIANGLE_STRIP,
+) -> Renderable {
 	rend: Renderable
 	rend.mesh = mesh
 	rend.material = material
@@ -313,7 +215,12 @@ createRenderableMeshMaterial :: proc(mesh: Mesh, material: Material, mode: u32 =
 	return rend
 }
 
-createRenderableMeshShaderTexture :: proc(mesh: Mesh, shader: u32, texture: Texture, mode: u32 = gl.TRIANGLE_STRIP) -> Renderable {
+createRenderableMeshShaderTexture :: proc(
+	mesh: Mesh,
+	shader: u32,
+	texture: Texture,
+	mode: u32 = gl.TRIANGLE_STRIP,
+) -> Renderable {
 	material: Material
 	material.shader = shader
 	material.texture = texture

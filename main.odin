@@ -15,8 +15,7 @@ import sdl "vendor:sdl3"
 VSYNC :: 1
 GL_VERSION_MAJOR :: 4
 GL_VERSION_MINOR :: 5
-SCREEN_WIDTH :: 512
-SCREEN_HEIGHT :: 512
+SCREEN_SIZE :: 1024
 
 // Grid parameters
 GRID_SIZE :: 100
@@ -32,19 +31,21 @@ MIN_PROBE_DISTANCE :: 0.125
 MIN_RAY_SIZE :: MIN_PROBE_DISTANCE / 2
 
 main :: proc() {
-	window, wind_ok := myGl.windowInit(SCREEN_WIDTH, SCREEN_HEIGHT, GL_VERSION_MAJOR, GL_VERSION_MINOR)
+	window, wind_ok := myGl.windowInit(SCREEN_SIZE, SCREEN_SIZE, GL_VERSION_MAJOR, GL_VERSION_MINOR)
 	if !wind_ok {
 		fmt.eprintln("ERROR: No se ha podido crear ventana SDL")
 		os.exit(-1)
 	}
 	defer myGl.windowDelete(&window)
 
+	gl.Enable(gl.BLEND)
+
 	emptyVao: u32
 	gl.GenVertexArrays(1, &emptyVao)
 	gl.BindVertexArray(emptyVao)
 	defer gl.DeleteBuffers(1, &emptyVao)
 
-	// ---------------
+	// ------Shader Load-------
 
 	program, prog_ok := gl.load_shaders_file("shaders/base_line.vs", "shaders/base_line.fs")
 	if !prog_ok {
@@ -53,42 +54,61 @@ main :: proc() {
 	}
 	defer gl.DeleteProgram(program)
 
-	screen_sh, sh_ok := gl.load_shaders_source(vertex_shader, frag_shader)
+	screen_sh, sh_ok := gl.load_shaders_file("shaders/base.vs", "shaders/show_sdf.fs")
 	if !sh_ok {
 		fmt.eprintln("Error creando shader")
 		os.exit(-1)
 	}
 	defer gl.DeleteProgram(screen_sh)
 
-	compute, comp_ok := gl.load_compute_file("shaders/draw.glsl")
+	draw_prog, comp_ok := gl.load_compute_file("shaders/draw.glsl")
 	if !comp_ok {
 		os.exit(-1)
 	}
-	defer gl.DeleteProgram(compute);
+	defer gl.DeleteProgram(draw_prog);
 
-	floodfill, flood_ok := gl.load_compute_file("shaders/floodfill.glsl")
+	floodfill, flood_ok := gl.load_compute_file("shaders/jumpflood.glsl")
 	if !flood_ok {
 		os.exit(-1)
 	}
 	defer gl.DeleteProgram(floodfill);
 
+	probe_cast, probe_ok := gl.load_compute_file("shaders/probe_cast.glsl")
+	if !probe_ok {
+		os.exit(-1)
+	}
+	defer gl.DeleteProgram(probe_cast);
+
+	render_probe, rend_ok := gl.load_shaders_file("shaders/draw_probe.vs", "shaders/draw_probe.fs")
+	if !rend_ok {
+		os.exit(-1)
+	}
+	defer gl.DeleteProgram(render_probe)
+
+	// ---------------
+
 	line: myGl.Mesh = myGl.createLine({0, 0, 0}, {0.5, 0, 0})
 	defer myGl.deleteMesh(&line)
 
-	target := myGl.createTarget(SCREEN_WIDTH, SCREEN_HEIGHT, gl.RGBA32F)
+	target := myGl.createTarget(SCREEN_SIZE, SCREEN_SIZE, gl.RGBA32F)
 	defer myGl.deleteTarget(&target)
 
 	screen := myGl.createQuadFS()
 	defer myGl.deleteMesh(&screen)
 
-	// Fields
-	SDF0 := myGl.createTexture2D(SCREEN_WIDTH, SCREEN_HEIGHT, gl.RGBA32F)
-	SDF1 := myGl.createTexture2D(SCREEN_WIDTH, SCREEN_HEIGHT, gl.RGBA32F)
 
 	// El rango es de [-1, 1], osea que es de 2 de ancho
 	min_dist: f32 = MIN_PROBE_DISTANCE
 	num_probs_x: i32 = i32(2. / f32(min_dist))
 	num_probs_y: i32 = i32(2. / f32(min_dist))
+
+	// Fields
+	SDF0 := myGl.createTexture2D(SCREEN_SIZE, SCREEN_SIZE, gl.RGBA32F)
+	SDF1 := myGl.createTexture2D(SCREEN_SIZE, SCREEN_SIZE, gl.RGBA32F)
+	probes := myGl.createTexture2D(num_probs_x*i32(math.sqrt(f32(C0_RAY_COUNT))), num_probs_y*i32(math.sqrt(f32(C0_RAY_COUNT))), gl.RGBA32F)
+
+
+	color : f32 = 1.
 
 	loop: for {
 		event: sdl.Event
@@ -101,8 +121,7 @@ main :: proc() {
 				}
 			} else if event.type == .MOUSE_BUTTON_DOWN {
 				if event.button.button == sdl.BUTTON_RIGHT {
-					fmt.println("Click!")
-					calculateSDF(floodfill, target.texture, SDF0, SDF1)
+					calculateSDF(floodfill, target.texture, &SDF0, &SDF1)
 				}
 			}
 		}
@@ -113,48 +132,64 @@ main :: proc() {
 		x, y: f32
 		mouseState := sdl.GetMouseState(&x, &y)
 		if .LEFT in mouseState {
-			myGl.setUniform(compute, "mouse_pos", []f32{x, SCREEN_HEIGHT-y})
+			myGl.setUniform(draw_prog, "mouse_pos", []f32{x, SCREEN_SIZE-y})
+			myGl.setUniform(draw_prog, "color", color)
 			myGl.bindImage(0, target.texture, .READ_WRITE)
-			myGl.compute_run(compute, SCREEN_WIDTH, SCREEN_HEIGHT)
+			myGl.compute_run(draw_prog, SCREEN_SIZE, SCREEN_SIZE)
 		}
 
+		// Raycast from probes with SDFs
+		myGl.bindImage(0, SDF0, .READ)
+		myGl.bindImage(1, probes, .WRITE)
+		myGl.setUniform(probe_cast, "sdf_res", []i32{SCREEN_SIZE, SCREEN_SIZE})
+		myGl.setUniform(probe_cast, "num_probs", []i32{num_probs_x, num_probs_y})
+		myGl.setUniform(probe_cast, "ray_count", i32(4))
+		myGl.setUniform(probe_cast, "ray_dist", f32(MIN_RAY_SIZE))
+		myGl.compute_run(probe_cast, u32(num_probs_x)*2, u32(num_probs_y)*2)
+
+
 		// Draw
+		myGl.unbindTargets()
+
+		gl.Viewport(0, 0, SCREEN_SIZE, SCREEN_SIZE)
+		myGl.setUniform(screen_sh, "screen_size", f32(SCREEN_SIZE))
+		myGl.setUniform(screen_sh, "range", f32(0.01))
+		myGl.renderMesh(screen, screen_sh, SDF0)
+
+		drawCascade(0, num_probs_x, num_probs_y, MIN_PROBE_DISTANCE, MIN_RAY_SIZE, 4, render_probe, probes)
 		gl.LineWidth(2)
 		gl.PointSize(2)
-
-		myGl.bindTarget(target)
-		//drawCascade(0, num_probs_x, num_probs_y, MIN_PROBE_DISTANCE, MIN_RAY_SIZE, 4, program)
-
-		gl.Viewport(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT)
-		myGl.unbindTargets()
-		myGl.renderMesh(screen, screen_sh, SDF0)
 
 		sdl.GL_SwapWindow(window.window)
 	}
 }
 
 // Jump Flood algorithm
-calculateSDF :: proc(compute: u32, field, sdf0, sdf1: myGl.Texture) {
+calculateSDF :: proc(compute: u32, field: myGl.Texture, sdf0, sdf1: ^myGl.Texture) {
 	// Variable shadowing
 	sdf0 := sdf0
 	sdf1 := sdf1
 
 	// Set field as starting sdf
-	gl.CopyImageSubData(field.id, gl.TEXTURE_2D, 0, 0, 0, 0, sdf0.id, gl.TEXTURE_2D, 0, 0, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 1)
-	for i: i32 = 2; i <= SCREEN_WIDTH; i = i * 2 {
-		myGl.setUniform(compute, "k", i32(SCREEN_WIDTH/i))
-		myGl.setUniform(compute, "screen_res", []f32{SCREEN_WIDTH, SCREEN_HEIGHT})
-		myGl.bindImage(0, sdf0, .READ)
-		myGl.bindImage(1, sdf1, .WRITE)
-		myGl.compute_run(compute, SCREEN_WIDTH, SCREEN_HEIGHT)
-		sdf0, sdf1 = sdf1, sdf0
-		if i == 64 do return
+	// First iteration with i = 1 is used to set the initial SDF from the field texture
+	// i >= 2 onward are the SDF Jump Flood steps
+	gl.CopyImageSubData(field.id, gl.TEXTURE_2D, 0, 0, 0, 0, sdf0.id, gl.TEXTURE_2D, 0, 0, 0, 0, SCREEN_SIZE, SCREEN_SIZE, 1)
+	for i: i32 = 1; i <= SCREEN_SIZE; i = i * 2 {
+		myGl.setUniform(compute, "k", i32(SCREEN_SIZE/i))
+		myGl.setUniform(compute, "screen_res", []f32{SCREEN_SIZE, SCREEN_SIZE})
+		myGl.bindImage(0, sdf0^, .READ)
+		myGl.bindImage(1, sdf1^, .WRITE)
+		myGl.compute_run(compute, SCREEN_SIZE, SCREEN_SIZE)
+		sdf0^, sdf1^ = sdf1^, sdf0^
 	}
+
+	// Last extra iteration with k = 1
+	// Helps getting better results
 	myGl.setUniform(compute, "k", i32(1))
-	myGl.bindImage(0, sdf0, .READ)
-	myGl.bindImage(1, sdf1, .WRITE)
-	myGl.compute_run(compute, SCREEN_WIDTH, SCREEN_HEIGHT)
-	sdf0, sdf1 = sdf1, sdf0
+	myGl.bindImage(0, sdf0^, .READ)
+	myGl.bindImage(1, sdf1^, .WRITE)
+	myGl.compute_run(compute, SCREEN_SIZE, SCREEN_SIZE)
+	sdf0^, sdf1^ = sdf1^, sdf0^
 }
 
 drawCascade :: proc(
@@ -164,6 +199,7 @@ drawCascade :: proc(
 	min_ray_dist: f32,
 	min_ray_count: i32,
 	shader: u32,
+	probes: myGl.Texture,
 ) {
 	ray_count: i32 = min_ray_count << u32(2 * (cascade_level))
 	probe_dist: f32 =
@@ -173,6 +209,8 @@ drawCascade :: proc(
 
 	nProbsX := num_probs_x >> u32(cascade_level)
 	nProbsY := num_probs_y >> u32(cascade_level)
+
+	myGl.bindTexture(0, probes)
 
 	for i in 0 ..< nProbsX {
 		for j in 0 ..< nProbsY {
@@ -188,20 +226,29 @@ drawProbe :: proc(position: [3]f32, ray_count: i32, ray_start: f32, ray_end: f32
 	wRes: f32 = 2 * math.PI / f32(ray_count)
 	angle: f32 = wRes / 2.
 
+	gl.ProvokingVertex(gl.FIRST_VERTEX_CONVENTION)
+
 	dir: [3]f32
 	for i in 0 ..< ray_count {
 		dir = glm.normalize_vec3({math.cos(angle), math.sin(angle), 0})
 		start: [3]f32 = position + dir * ray_start
 		end: [3]f32 = position + dir * ray_end
+		myGl.setUniform(shader, "num_probs", []i32{16, 16})
+		myGl.setUniform(shader, "ray_count", i32(4))
+		myGl.setUniform(shader, "ray_id", i32(i))
 		myGl.drawLine(start, end, shader)
 		angle += wRes
 	}
 
 	myGl.drawPoint(position, shader, {0, 1, 0})
+
+	gl.Finish()
+
+	gl.ProvokingVertex(gl.LAST_VERTEX_CONVENTION)
 }
 
 vertex_shader: string = `
-#version 460 core
+#version 450 core
 
 struct VertexData {
 	float position[3];
@@ -237,16 +284,28 @@ void main() {
 
 
 frag_shader: string = `
-#version 460 core
+#version 450 core
 
 layout(binding = 0) uniform sampler2D textura;
+uniform float screen_size;
+
 
 in vec2 uvs;
 out vec4 frag_color;
 
 void main() {
-	vec2 dist = texture(textura, uvs).xy/512.;
-    frag_color = vec4(dist.x, dist.y, 0., 1.);
+	vec2 coords = gl_FragCoord.xy;
+	vec4 color = texture(textura, uvs);
+
+	float dist;
+	if (color.y != 0. && color.z != 0.) {
+		dist = length(color.yz-coords)/screen_size;
+	} 
+	else {
+		dist = 0.;
+	}
+
+    frag_color = vec4(dist, dist, dist, 1.);
 }
 
 `

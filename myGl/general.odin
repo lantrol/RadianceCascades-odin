@@ -235,4 +235,5 @@ createRenderableMeshShaderTexture :: proc(
 compute_run :: proc(compute: u32, group_x: u32 = 1, group_y: u32 = 1, group_z: u32 = 1) {
 	gl.UseProgram(compute)
 	gl.DispatchCompute(group_x, group_y, 1)
+	gl.MemoryBarrier(gl.ALL_BARRIER_BITS)
 }

@@ -11,6 +11,7 @@ uniform ivec2 sdf_res;
 uniform ivec2 num_probs;
 uniform int ray_count;
 uniform float ray_dist;
+uniform int cascade_level;
 
 // Working in normalized coordenates [0, 1] except for sdf texture read
 
@@ -53,7 +54,10 @@ void main() {
 	vec2 ray_vec = normalize(vec2(cos(ray_angle), sin(ray_angle)));
 
 	float max_travel = ray_dist/2.; // Ray dist comes in range [-1, 1], this is in [0, 1]
-	bool hit = raycast(probe_coords, probe_coords+ray_vec*max_travel, max_travel);
+	float start_dist = (max_travel * (1 - pow(4, cascade_level))) / (1 - 4);
+	float end_dist = max_travel * pow(4, cascade_level);
+
+	bool hit = raycast(probe_coords+ray_vec*start_dist, probe_coords+ray_vec*end_dist, end_dist-start_dist);
 
 	vec4 probeData = vec4(0.);
 	if (hit) {

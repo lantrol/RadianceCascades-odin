@@ -10,7 +10,6 @@ layout(binding = 0, std430) readonly buffer ssbo1 {
 };
 
 out vec3 color;
-flat out vec2 position;
 
 vec3 getPosition(int index) {
     return vec3(
@@ -30,6 +29,5 @@ vec3 getColor(int index) {
 
 void main() {
     color = getColor(gl_VertexID);
-    position = getPosition(gl_VertexID).xy;
     gl_Position = vec4(getPosition(gl_VertexID), 1.0);
 }

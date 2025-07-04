@@ -22,30 +22,36 @@ GRID_SIZE :: 100
 
 // Cascade Probes Parameters
 
-CASCADE_AMOUNT :: 2
+CASCADE_AMOUNT :: 4
+PROBE_RENDER :: false
 //MIN_SIZE :: 1. / 10.
-C0_RAY_COUNT :: 4
+C0_RAY_COUNT :: 16
 MAX_RAY_ANGLE :: 2 * math.PI / C0_RAY_COUNT
 //MIN_PROBE_DISTANCE :: MIN_SIZE / MAX_RAY_ANGLE
-MIN_PROBE_DISTANCE :: 0.125
-MIN_RAY_SIZE :: MIN_PROBE_DISTANCE / 2
+MIN_PROBE_RES :: 16
+MIN_RAY_SIZE :: (2. / f32(MIN_PROBE_RES)) / 2
 
 RCContext :: struct {
 	// Base values to calculate cascade level info
-	base_ray_count 	: i32,
-	base_ray_length	: f32,
-	base_probe_res 	: i32, // probes per side
+	base_ray_count:  i32,
+	base_ray_length: f32,
+	base_probe_res:  i32, // probes per side
 
 	// Fields for calculations
-	sdf0			: myGl.Texture,
-	sdf1			: myGl.Texture, // second tex for Ping-Pong
-	probes 			: myGl.Texture,
-	field 			: myGl.Texture,
-
+	sdf0:            myGl.Texture,
+	sdf1:            myGl.Texture, // second tex for Ping-Pong
+	cascades:        []myGl.Texture,
+	field:           myGl.Texture,
 }
 
 main :: proc() {
-	window, wind_ok := myGl.windowInit(SCREEN_SIZE, SCREEN_SIZE, GL_VERSION_MAJOR, GL_VERSION_MINOR)
+	fmt.println(MIN_RAY_SIZE)
+	window, wind_ok := myGl.windowInit(
+		SCREEN_SIZE,
+		SCREEN_SIZE,
+		GL_VERSION_MAJOR,
+		GL_VERSION_MINOR,
+	)
 	if !wind_ok {
 		fmt.eprintln("ERROR: No se ha podido crear ventana SDL")
 		os.exit(-1)
@@ -80,19 +86,19 @@ main :: proc() {
 	if !comp_ok {
 		os.exit(-1)
 	}
-	defer gl.DeleteProgram(draw_prog);
+	defer gl.DeleteProgram(draw_prog)
 
 	floodfill, flood_ok := gl.load_compute_file("shaders/jumpflood.glsl")
 	if !flood_ok {
 		os.exit(-1)
 	}
-	defer gl.DeleteProgram(floodfill);
+	defer gl.DeleteProgram(floodfill)
 
 	probe_cast, probe_ok := gl.load_compute_file("shaders/probe_cast.glsl")
 	if !probe_ok {
 		os.exit(-1)
 	}
-	defer gl.DeleteProgram(probe_cast);
+	defer gl.DeleteProgram(probe_cast)
 
 	render_probe, rend_ok := gl.load_shaders_file("shaders/draw_probe.vs", "shaders/draw_probe.fs")
 	if !rend_ok {
@@ -105,6 +111,11 @@ main :: proc() {
 		os.exit(-1)
 	}
 
+	probe_merge, merge_ok := gl.load_compute_file("shaders/probe_merge.glsl")
+	if !merge_ok {
+		os.exit(-1)
+	}
+
 	// ---------------
 	drawTarget := myGl.createTarget(SCREEN_SIZE, SCREEN_SIZE, gl.RGBA32F)
 	defer myGl.deleteTarget(&drawTarget)
@@ -114,19 +125,39 @@ main :: proc() {
 
 
 	// El rango es de [-1, 1], osea que es de 2 de ancho
-	min_dist: f32 = MIN_PROBE_DISTANCE
-	num_probs: i32 = i32(2. / f32(min_dist))
+	//min_dist: f32 = 2. / MIN_PROBE_RES
+	//num_probs: i32 = i32(2. / f32(min_dist))
 
-	rcContext : RCContext = {
-		base_probe_res = num_probs,
-		base_ray_count = 4,
+	num_probs: i32 = MIN_PROBE_RES
+
+	rcContext: RCContext = {
+		base_probe_res  = num_probs,
+		base_ray_count  = C0_RAY_COUNT,
 		base_ray_length = MIN_RAY_SIZE,
-		sdf0 = myGl.createTexture2D(SCREEN_SIZE, SCREEN_SIZE, gl.RGBA32F),
-		sdf1 = myGl.createTexture2D(SCREEN_SIZE, SCREEN_SIZE, gl.RGBA32F),
-		probes = myGl.createTexture2D(num_probs*i32(math.sqrt(f32(C0_RAY_COUNT))), num_probs*i32(math.sqrt(f32(C0_RAY_COUNT))), gl.RGBA32F),
-		field = myGl.createTexture2D(num_probs, num_probs, gl.RGBA32F, gl.CLAMP_TO_EDGE, gl.LINEAR),
+		sdf0            = myGl.createTexture2D(SCREEN_SIZE, SCREEN_SIZE, gl.RGBA32F),
+		sdf1            = myGl.createTexture2D(SCREEN_SIZE, SCREEN_SIZE, gl.RGBA32F),
+		cascades        = make([]myGl.Texture, i32(CASCADE_AMOUNT)),
+		field           = myGl.createTexture2D(
+			num_probs,
+			num_probs,
+			gl.RGBA32F,
+			gl.CLAMP_TO_EDGE,
+			gl.LINEAR,
+		),
+	}
+	//defer delete(rcContext.cascades)
+
+	// Initializing all cascades
+	for i: i32 = 0; i < CASCADE_AMOUNT; i += 1 {
+		rcContext.cascades[i] = myGl.createTexture2D(
+			num_probs * i32(math.sqrt(f32(C0_RAY_COUNT))),
+			num_probs * i32(math.sqrt(f32(C0_RAY_COUNT))),
+			gl.RGBA32F,
+		)
 	}
 
+
+	color: []f32 = {1., 1., 1.}
 	loop: for {
 		event: sdl.Event
 		for sdl.PollEvent(&event) {
@@ -149,21 +180,28 @@ main :: proc() {
 		x, y: f32
 		mouseState := sdl.GetMouseState(&x, &y)
 		if .LEFT in mouseState {
-			myGl.setUniform(draw_prog, "mouse_pos", []f32{x, SCREEN_SIZE-y})
-			myGl.setUniform(draw_prog, "color", f32(1.))
+			myGl.setUniform(draw_prog, "mouse_pos", []f32{x, SCREEN_SIZE - y})
+			myGl.setUniform(draw_prog, "color", color)
 			myGl.bindImage(0, drawTarget.texture, .READ_WRITE)
 			myGl.compute_run(draw_prog, SCREEN_SIZE, SCREEN_SIZE)
 		}
 
 		// Raycast from probes with SDFs
 		cascade_level: i32 = 0
-		calculateCascade(rcContext, cascade_level, probe_cast)
+		//calculateCascade(rcContext, cascade_level, probe_cast)
+		//calculateCascade(rcContext, cascade_level + 1, probe_cast)
+		for i: i32 = 0; i < CASCADE_AMOUNT; i += 1 {
+			calculateCascade(rcContext, i, probe_cast)
+		}
+
+		// Cascades merging
+		mergeCascades(rcContext, probe_merge)
 
 		// Probe to field
 		nProbsX := rcContext.base_probe_res >> u32(cascade_level)
 		nProbsY := rcContext.base_probe_res >> u32(cascade_level)
 		ray_count := int(rcContext.base_ray_count) << u32(2 * (cascade_level))
-		myGl.bindImage(0, rcContext.probes, .READ)
+		myGl.bindImage(0, rcContext.cascades[cascade_level], .READ)
 		myGl.bindImage(1, rcContext.field, .WRITE)
 		myGl.setUniform(probe_to_field, "num_probs", []i32{nProbsX, nProbsY})
 		myGl.setUniform(probe_to_field, "ray_count", i32(ray_count))
@@ -177,9 +215,13 @@ main :: proc() {
 		//myGl.setUniform(screen_sh, "range", f32(0.01))
 		myGl.renderMesh(screen, screen_sh, rcContext.field)
 
-		drawCascade(rcContext, cascade_level, render_probe)
 		gl.LineWidth(2)
 		gl.PointSize(2)
+		if PROBE_RENDER {
+			for i: i32 = 0; i < CASCADE_AMOUNT; i += 1 {
+				drawCascade(rcContext, i, render_probe)
+			}
+		}
 
 		sdl.GL_SwapWindow(window.window)
 	}
@@ -192,12 +234,28 @@ calculateSDF :: proc(compute: u32, field: myGl.Texture, sdf0, sdf1: ^myGl.Textur
 	sdf1 := sdf1
 
 	// Copy drawn image to base sdf
-	gl.CopyImageSubData(field.id, gl.TEXTURE_2D, 0, 0, 0, 0, sdf0.id, gl.TEXTURE_2D, 0, 0, 0, 0, SCREEN_SIZE, SCREEN_SIZE, 1)
+	gl.CopyImageSubData(
+		field.id,
+		gl.TEXTURE_2D,
+		0,
+		0,
+		0,
+		0,
+		sdf0.id,
+		gl.TEXTURE_2D,
+		0,
+		0,
+		0,
+		0,
+		SCREEN_SIZE,
+		SCREEN_SIZE,
+		1,
+	)
 
 	// First iteration with i = 1 is used to set the initial SDF from the field texture
 	// i >= 2 onward are the SDF Jump Flood steps
 	for i: i32 = 1; i <= SCREEN_SIZE; i = i * 2 {
-		myGl.setUniform(compute, "k", i32(SCREEN_SIZE/i))
+		myGl.setUniform(compute, "k", i32(SCREEN_SIZE / i))
 		myGl.setUniform(compute, "screen_res", []f32{SCREEN_SIZE, SCREEN_SIZE})
 		myGl.bindImage(0, sdf0^, .READ)
 		myGl.bindImage(1, sdf1^, .WRITE)
@@ -218,34 +276,51 @@ calculateCascade :: proc(rcContext: RCContext, cascade_level: i32, program: u32)
 	nProbsX := rcContext.base_probe_res >> u32(cascade_level)
 	nProbsY := rcContext.base_probe_res >> u32(cascade_level)
 	ray_count := int(rcContext.base_ray_count) << u32(2 * (cascade_level))
-	ray_tex_side : u32 = u32(math.sqrt_f32(f32(ray_count)))
-	
+	ray_tex_side: u32 = u32(math.sqrt_f32(f32(ray_count)))
+
 	myGl.bindImage(0, rcContext.sdf0, .READ)
-	myGl.bindImage(1, rcContext.probes, .WRITE)
+	myGl.bindImage(1, rcContext.cascades[cascade_level], .WRITE)
 	myGl.setUniform(program, "sdf_res", []i32{rcContext.sdf0.width, rcContext.sdf0.height})
 	myGl.setUniform(program, "num_probs", []i32{nProbsX, nProbsY})
 	myGl.setUniform(program, "ray_count", i32(ray_count))
 	myGl.setUniform(program, "ray_dist", f32(rcContext.base_ray_length))
 	myGl.setUniform(program, "cascade_level", i32(cascade_level))
-	myGl.compute_run(program, u32(nProbsX)*ray_tex_side, u32(nProbsY)*ray_tex_side)
+	myGl.compute_run(program, u32(nProbsX) * ray_tex_side, u32(nProbsY) * ray_tex_side)
 }
 
-drawCascade :: proc(
-	rcContext: RCContext,
-	cascade_level: i32,
-	shader: u32,
-) {
-	min_probe_dist: f32 = 2./f32(rcContext.base_probe_res) // OpenGL coords [-1, 1] -> length = 2
+mergeCascades :: proc(rcContext: RCContext, program: u32) {
+	cascade_amount: i32 = i32(len(rcContext.cascades))
+
+	for i: i32 = cascade_amount - 1; i > 0; i = i - 1 {
+		// Cascades merging
+		nProbsX := rcContext.base_probe_res >> u32(i - 1)
+		nProbsY := rcContext.base_probe_res >> u32(i - 1)
+		ray_count := int(rcContext.base_ray_count) << u32(2 * (i - 1))
+		myGl.setUniform(program, "num_probs", []i32{nProbsX, nProbsY})
+		myGl.setUniform(program, "ray_count", i32(ray_count))
+		myGl.bindImage(0, rcContext.cascades[i - 1], .READ_WRITE)
+		myGl.bindImage(1, rcContext.cascades[i], .READ)
+		myGl.compute_run(
+			program,
+			u32(rcContext.cascades[0].width),
+			u32(rcContext.cascades[0].height),
+		)
+	}
+}
+
+drawCascade :: proc(rcContext: RCContext, cascade_level: i32, shader: u32) {
+	min_probe_dist: f32 = 2. / f32(rcContext.base_probe_res) // OpenGL coords [-1, 1] -> length = 2
 	ray_count: i32 = rcContext.base_ray_count << u32(2 * (cascade_level))
 	probe_dist: f32 =
 		min_probe_dist if cascade_level == 0 else min_probe_dist * f32(i32(1 << u32(cascade_level)))
-	start_dist: f32 = (rcContext.base_ray_length * (1 - glm.pow_f32(4, f32(cascade_level)))) / (1 - 4)
+	start_dist: f32 =
+		(rcContext.base_ray_length * (1 - glm.pow_f32(4, f32(cascade_level)))) / (1 - 4)
 	end_dist: f32 = rcContext.base_ray_length * glm.pow_f32(4, f32(cascade_level))
 
 	nProbsX := rcContext.base_probe_res >> u32(cascade_level)
 	nProbsY := rcContext.base_probe_res >> u32(cascade_level)
 
-	myGl.bindTexture(0, rcContext.probes)
+	myGl.bindTexture(0, rcContext.cascades[cascade_level])
 
 	for i in 0 ..< nProbsX {
 		for j in 0 ..< nProbsY {
@@ -257,7 +332,14 @@ drawCascade :: proc(
 	}
 }
 
-drawProbe :: proc(position: [3]f32, ray_count: i32, ray_start: f32, ray_end: f32, probe_amount: []i32, shader: u32) {
+drawProbe :: proc(
+	position: [3]f32,
+	ray_count: i32,
+	ray_start: f32,
+	ray_end: f32,
+	probe_amount: []i32,
+	shader: u32,
+) {
 	wRes: f32 = 2 * math.PI / f32(ray_count)
 	angle: f32 = wRes / 2.
 

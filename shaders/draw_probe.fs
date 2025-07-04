@@ -23,7 +23,7 @@ void main() {
     float has_hit = texture(probes, data_coords).a;
 
     vec4 finalColor = vec4(1.);
-    if (has_hit >= 0.99) {
+    if (has_hit >= 0.001) {
         finalColor = vec4(1., 0., 0., 1.);
     }
 

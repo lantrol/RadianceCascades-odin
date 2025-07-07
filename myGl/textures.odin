@@ -90,6 +90,11 @@ writeTexture2D :: proc(texture: Texture, data: []$T, components: u32, width, hei
 	}
 }
 
+deleteTexture :: proc(texture: ^Texture) {
+	gl.DeleteTextures(1, &(texture^.id))
+	texture^ = {} // clear values
+}
+
 bindImage :: proc(unit: u32, texture: Texture, use: enum {
 		READ,
 		WRITE,
@@ -97,12 +102,12 @@ bindImage :: proc(unit: u32, texture: Texture, use: enum {
 	}) {
 	gl_use: u32
 	switch use {
-		case .READ:
-			gl_use = gl.READ_ONLY
-		case .WRITE:
-			gl_use = gl.WRITE_ONLY
-		case .READ_WRITE:
-			gl_use = gl.READ_WRITE
+	case .READ:
+		gl_use = gl.READ_ONLY
+	case .WRITE:
+		gl_use = gl.WRITE_ONLY
+	case .READ_WRITE:
+		gl_use = gl.READ_WRITE
 	}
 
 	gl.BindImageTexture(unit, texture.id, 0, false, 0, gl_use, texture.internalformat)
@@ -133,5 +138,6 @@ bindTarget :: proc(target: Target, mode: u32 = gl.FRAMEBUFFER) {
 }
 
 unbindTargets :: proc() {
-    gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
+	gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
 }
+

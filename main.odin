@@ -7,7 +7,7 @@ import "core:math/rand"
 import "core:os"
 import "core:strings"
 import "core:time"
-import "myGl"
+import crgl "crumbsgl"
 
 import gl "vendor:OpenGL"
 import sdl "vendor:sdl3"
@@ -22,18 +22,18 @@ GRID_SIZE :: 100
 
 // Cascade Probes Parameters
 
-CASCADE_AMOUNT :: 1
+CASCADE_AMOUNT :: 9
 PROBE_RENDER :: true
-C0_RAY_COUNT :: 16
+C0_RAY_COUNT :: 4
 MAX_RAY_ANGLE :: 2 * math.PI / C0_RAY_COUNT
-MIN_PROBE_RES :: 16
+MIN_PROBE_RES :: 512
 MIN_RAY_SIZE :: (2. / f32(MIN_PROBE_RES)) / 2
 //MIN_SIZE :: 1. / 10.
 //MIN_PROBE_DISTANCE :: MIN_SIZE / MAX_RAY_ANGLE
 
 main :: proc() {
 	fmt.println(MIN_RAY_SIZE)
-	window, wind_ok := myGl.windowInit(
+	window, wind_ok := crgl.windowInit(
 		SCREEN_SIZE,
 		SCREEN_SIZE,
 		GL_VERSION_MAJOR,
@@ -43,9 +43,13 @@ main :: proc() {
 		fmt.eprintln("ERROR: No se ha podido crear ventana SDL")
 		os.exit(-1)
 	}
-	defer myGl.windowDelete(&window)
+	defer crgl.windowDelete(&window)
 
 	gl.Enable(gl.BLEND)
+	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+
+	font, ok := crgl.font_atlas_from_file("./crumbsgl/fonts/Comic Sans MS.ttf", i32(' '), i32('~'))
+	crgl.gui_set_font(font)
 
 	// Empty vao to enable rendering with DSA
 	emptyVao: u32
@@ -64,6 +68,13 @@ main :: proc() {
 
 	screen_sh, sh_ok := gl.load_shaders_file("shaders/base.vs", "shaders/base.fs")
 	if !sh_ok {
+		fmt.eprintln("Error creando shader")
+		os.exit(-1)
+	}
+	defer gl.DeleteProgram(screen_sh)
+
+	show_sdf_sh, sdf_ok := gl.load_shaders_file("shaders/base.vs", "shaders/show_sdf.fs")
+	if !sdf_ok {
 		fmt.eprintln("Error creando shader")
 		os.exit(-1)
 	}
@@ -104,11 +115,11 @@ main :: proc() {
 	}
 
 	// ---------------
-	drawTarget := myGl.createTarget(SCREEN_SIZE, SCREEN_SIZE, gl.RGBA32F)
-	defer myGl.deleteTarget(&drawTarget)
+	drawTarget := crgl.createTarget(SCREEN_SIZE, SCREEN_SIZE, gl.RGBA32F)
+	defer crgl.deleteTarget(&drawTarget)
 
-	screen := myGl.createQuadFS()
-	defer myGl.deleteMesh(&screen)
+	screen := crgl.createQuadFS()
+	defer crgl.deleteMesh(&screen)
 
 
 	// El rango es de [-1, 1], osea que es de 2 de ancho
@@ -127,19 +138,41 @@ main :: proc() {
 	defer rc_delete(&rcContext)
 
 	color: []f32 = {1., 1., 1.}
+	debugRender: enum {
+		field,
+		draw,
+		sdf,
+		cascade,
+	} = .field
+
 	loop: for {
-		handle_events()
-		if is_key_pressed(sdl.K_ESCAPE) do break loop
-		if has_quit() do break loop
-		if is_mouse_button_pressed(sdl.BUTTON_RIGHT) {
+		crgl.handle_events()
+		if crgl.is_key_just_pressed(sdl.K_ESCAPE) do break loop
+		if crgl.has_quit() do break loop
+		if crgl.is_button_just_pressed(.RIGHT) {
 			rc_calculate_sdf(&rcContext, floodfill)
 		}
+
+		// Color change
+		if crgl.is_key_just_pressed(sdl.K_1) {
+			color = {1., 1., 1.}
+		}
+		if crgl.is_key_just_pressed(sdl.K_2) {
+			color = {0, 0, 0}
+		};if crgl.is_key_just_pressed(sdl.K_3) {
+			color = {10., 0.15, 0.15}
+		}
+
+		start_time := time.tick_now()
 
 		gl.ClearColor(0.2, 0.2, 0.2, 1.)
 		gl.Clear(gl.COLOR_BUFFER_BIT)
 
 		// Handle field drawing
 		rc_draw_handle(rcContext, color, draw_prog)
+
+		// SDF calc
+		//rc_calculate_sdf(&rcContext, floodfill)
 
 		// Raycast from probes with SDFs
 		rc_calculate_cascades(rcContext, probe_cast)
@@ -151,27 +184,60 @@ main :: proc() {
 		rc_calculate_field(rcContext, probe_to_field)
 
 		// Draw
-		myGl.unbindTargets()
+		crgl.unbindTargets()
 
 		gl.Viewport(0, 0, SCREEN_SIZE, SCREEN_SIZE)
-		//myGl.setUniform(screen_sh, "screen_size", f32(SCREEN_SIZE))
-		//myGl.setUniform(screen_sh, "range", f32(0.01))
-		myGl.renderMesh(screen, screen_sh, rcContext.field)
+		switch debugRender {
+		case .field:
+			crgl.renderMesh(screen, screen_sh, rcContext.field)
+		case .draw:
+			crgl.renderMesh(screen, screen_sh, rcContext.draw)
+		case .sdf:
+			crgl.setUniform(show_sdf_sh, "screen_size", f32(SCREEN_SIZE))
+			crgl.setUniform(show_sdf_sh, "range", f32(0.01))
+			crgl.renderMesh(screen, show_sdf_sh, rcContext.sdf0)
+		case .cascade:
+			crgl.renderMesh(screen, screen_sh, rcContext.cascades[0])
+		}
 
 		gl.LineWidth(2)
 		gl.PointSize(2)
-		if PROBE_RENDER {
-			for i: i32 = 0; i < CASCADE_AMOUNT; i += 1 {
-				drawCascade(rcContext, i, render_probe)
+		// if PROBE_RENDER {
+		// 	for i: i32 = 0; i < CASCADE_AMOUNT; i += 1 {
+		// 		drawCascade(rcContext, i, render_probe)
+		// 	}
+		// }
+
+		gl.Finish()
+		duration := time.tick_since(start_time)
+		{
+			crgl.gui_begin_window("Debug", alpha = 0.9)
+
+			crgl.gui_text("FPS: ", 1. / time.duration_seconds(duration))
+
+			if crgl.gui_button("Render field") {
+				debugRender = .field
 			}
+			if crgl.gui_button("Render draw") {
+				debugRender = .draw
+			}
+			if crgl.gui_button("Render sdf") {
+				debugRender = .sdf
+			}
+			if crgl.gui_button("Render cascade") {
+				debugRender = .cascade
+			}
+
+			crgl.gui_end_window()
 		}
 
+		free_all(context.temp_allocator)
 		sdl.GL_SwapWindow(window.window)
 	}
 }
 
 // Jump Flood algorithm
-// calculateSDF :: proc(compute: u32, field: myGl.Texture, sdf0, sdf1: ^myGl.Texture) {
+// calculateSDF :: proc(compute: u32, field: crgl.Texture, sdf0, sdf1: ^crgl.Texture) {
 // 	// Variable shadowing
 // 	sdf0 := sdf0
 // 	sdf1 := sdf1
@@ -198,20 +264,20 @@ main :: proc() {
 // 	// First iteration with i = 1 is used to set the initial SDF from the field texture
 // 	// i >= 2 onward are the SDF Jump Flood steps
 // 	for i: i32 = 1; i <= SCREEN_SIZE; i = i * 2 {
-// 		myGl.setUniform(compute, "k", i32(SCREEN_SIZE / i))
-// 		myGl.setUniform(compute, "screen_res", []f32{SCREEN_SIZE, SCREEN_SIZE})
-// 		myGl.bindImage(0, sdf0^, .READ)
-// 		myGl.bindImage(1, sdf1^, .WRITE)
-// 		myGl.compute_run(compute, SCREEN_SIZE, SCREEN_SIZE)
+// 		crgl.setUniform(compute, "k", i32(SCREEN_SIZE / i))
+// 		crgl.setUniform(compute, "screen_res", []f32{SCREEN_SIZE, SCREEN_SIZE})
+// 		crgl.bindImage(0, sdf0^, .READ)
+// 		crgl.bindImage(1, sdf1^, .WRITE)
+// 		crgl.compute_run(compute, SCREEN_SIZE, SCREEN_SIZE)
 // 		sdf0^, sdf1^ = sdf1^, sdf0^
 // 	}
 
 // 	// Last extra iteration with k = 1
 // 	// Helps getting better results
-// 	myGl.setUniform(compute, "k", i32(1))
-// 	myGl.bindImage(0, sdf0^, .READ)
-// 	myGl.bindImage(1, sdf1^, .WRITE)
-// 	myGl.compute_run(compute, SCREEN_SIZE, SCREEN_SIZE)
+// 	crgl.setUniform(compute, "k", i32(1))
+// 	crgl.bindImage(0, sdf0^, .READ)
+// 	crgl.bindImage(1, sdf1^, .WRITE)
+// 	crgl.compute_run(compute, SCREEN_SIZE, SCREEN_SIZE)
 // 	sdf0^, sdf1^ = sdf1^, sdf0^
 // }
 
@@ -221,14 +287,14 @@ main :: proc() {
 // 	ray_count := int(rcContext.base_ray_count) << u32(2 * (cascade_level))
 // 	ray_tex_side: u32 = u32(math.sqrt_f32(f32(ray_count)))
 
-// 	myGl.bindImage(0, rcContext.sdf0, .READ)
-// 	myGl.bindImage(1, rcContext.cascades[cascade_level], .WRITE)
-// 	myGl.setUniform(program, "sdf_res", []i32{rcContext.sdf0.width, rcContext.sdf0.height})
-// 	myGl.setUniform(program, "num_probs", []i32{nProbsX, nProbsY})
-// 	myGl.setUniform(program, "ray_count", i32(ray_count))
-// 	myGl.setUniform(program, "ray_dist", f32(rcContext.base_ray_length))
-// 	myGl.setUniform(program, "cascade_level", i32(cascade_level))
-// 	myGl.compute_run(program, u32(nProbsX) * ray_tex_side, u32(nProbsY) * ray_tex_side)
+// 	crgl.bindImage(0, rcContext.sdf0, .READ)
+// 	crgl.bindImage(1, rcContext.cascades[cascade_level], .WRITE)
+// 	crgl.setUniform(program, "sdf_res", []i32{rcContext.sdf0.width, rcContext.sdf0.height})
+// 	crgl.setUniform(program, "num_probs", []i32{nProbsX, nProbsY})
+// 	crgl.setUniform(program, "ray_count", i32(ray_count))
+// 	crgl.setUniform(program, "ray_dist", f32(rcContext.base_ray_length))
+// 	crgl.setUniform(program, "cascade_level", i32(cascade_level))
+// 	crgl.compute_run(program, u32(nProbsX) * ray_tex_side, u32(nProbsY) * ray_tex_side)
 // }
 
 // mergeCascades :: proc(rcContext: RCContext, program: u32) {
@@ -239,11 +305,11 @@ main :: proc() {
 // 		nProbsX := rcContext.base_probe_res >> u32(i - 1)
 // 		nProbsY := rcContext.base_probe_res >> u32(i - 1)
 // 		ray_count := int(rcContext.base_ray_count) << u32(2 * (i - 1))
-// 		myGl.setUniform(program, "num_probs", []i32{nProbsX, nProbsY})
-// 		myGl.setUniform(program, "ray_count", i32(ray_count))
-// 		myGl.bindImage(0, rcContext.cascades[i - 1], .READ_WRITE)
-// 		myGl.bindImage(1, rcContext.cascades[i], .READ)
-// 		myGl.compute_run(
+// 		crgl.setUniform(program, "num_probs", []i32{nProbsX, nProbsY})
+// 		crgl.setUniform(program, "ray_count", i32(ray_count))
+// 		crgl.bindImage(0, rcContext.cascades[i - 1], .READ_WRITE)
+// 		crgl.bindImage(1, rcContext.cascades[i], .READ)
+// 		crgl.compute_run(
 // 			program,
 // 			u32(rcContext.cascades[0].width),
 // 			u32(rcContext.cascades[0].height),
@@ -263,7 +329,7 @@ drawCascade :: proc(rcContext: RCContext, cascade_level: i32, shader: u32) {
 	nProbsX := rcContext.base_probe_res >> u32(cascade_level)
 	nProbsY := rcContext.base_probe_res >> u32(cascade_level)
 
-	myGl.bindTexture(0, rcContext.cascades[cascade_level])
+	crgl.bindTexture(0, rcContext.cascades[cascade_level])
 
 	for i in 0 ..< nProbsX {
 		for j in 0 ..< nProbsY {
@@ -291,15 +357,15 @@ drawProbe :: proc(
 		dir = glm.normalize_vec3({math.cos(angle), math.sin(angle), 0})
 		start: [3]f32 = position + dir * ray_start
 		end: [3]f32 = position + dir * ray_end
-		myGl.setUniform(shader, "probe_pos", []f32{position.x, position.y})
-		myGl.setUniform(shader, "num_probs", probe_amount)
-		myGl.setUniform(shader, "ray_count", i32(ray_count))
-		myGl.setUniform(shader, "ray_id", i32(i))
-		myGl.drawLine(start, end, shader)
+		crgl.setUniform(shader, "probe_pos", []f32{position.x, position.y})
+		crgl.setUniform(shader, "num_probs", probe_amount)
+		crgl.setUniform(shader, "ray_count", i32(ray_count))
+		crgl.setUniform(shader, "ray_id", i32(i))
+		crgl.drawLine(start, end, shader)
 		angle += wRes
 	}
 
-	myGl.drawPoint(position, shader, {0, 1, 0})
+	crgl.drawPoint(position, shader, {0, 1, 0})
 	gl.Finish()
 }
 
@@ -356,7 +422,7 @@ void main() {
 	float dist;
 	if (color.y != 0. && color.z != 0.) {
 		dist = length(color.yz-coords)/screen_size;
-	} 
+	}
 	else {
 		dist = 0.;
 	}

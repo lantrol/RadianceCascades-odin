@@ -76,12 +76,12 @@ void main() {
 
     hit_info hit = raycast(probe_coords + ray_vec * start_dist, probe_coords + ray_vec * end_dist, end_dist - start_dist);
 
-    vec4 probeData = vec4(0.);
-    if (hit.travel >= 0.) {
-        float distance = hit.travel * sdf_res.x; // Increasing distance to aboid low radious in 1/r^2
-        probeData.a = 1.;
-        probeData.xyz = vec3(min(hit.material.xyz / (distance * distance), hit.material.xyz));
-        //probeData.xyz = hit.material.xyz;
+    vec4 probe_data = vec4(0., 0., 0., 1.);
+    if (hit.material.a >= 0.) {
+        float distance = 1 + length(hit.position - probe_coords); // Increasing distance to aboid low radious in 1/r^2
+        probe_data.a = 0.; // 0 represents it hit something
+        probe_data.xyz = vec3(min(hit.material.xyz / (distance * distance), hit.material.xyz));
+        //probe_data.xyz = hit.material.xyz * sin(distance * 100);
     }
-    imageStore(probes, invocation, probeData);
+    imageStore(probes, invocation, probe_data);
 }

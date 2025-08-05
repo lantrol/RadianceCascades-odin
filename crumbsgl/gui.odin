@@ -87,6 +87,19 @@ gui_is_pressed :: proc(rect: GuiRect) -> bool {
 	return false
 }
 
+gui_in_window :: proc() -> bool {
+	x, y := get_mouse_position()
+	for key, window in allGuiWindows {
+		if x > window.x &&
+		   x < window.x + window.width &&
+		   y > window.y &&
+		   y < window.y + window.height {
+			return true
+		}
+	}
+	return false
+}
+
 gui_begin_window :: proc(name: string, alpha: f32 = 1.) {
 	if name not_in allGuiWindows {
 		newWindow := GuiWindowContext {
@@ -185,6 +198,7 @@ gui_end_window :: proc() {
 		}
 	}
 
+	activeWindow.height = gGuiOptions.topBarHeight + activeWindow.voffset
 	activeWindow.rectCount = 0
 	activeWindow.textCount = 0
 	activeWindow.voffset = gGuiOptions.vpadding
@@ -326,3 +340,4 @@ void main() {
 }
 
 `
+

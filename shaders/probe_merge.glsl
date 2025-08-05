@@ -21,13 +21,9 @@ ivec2 getRayPos(ivec2 probe_id, int ray_id, int probes_per_side, int ray_per_sid
     return data_coords;
 }
 
-vec3 getFarProbeRayData(ivec2 probe_id, int ray_id, int probes_per_side, int ray_per_side) {
-    vec3 colorData = vec3(0.);
-    for (int i = 0; i < 4; i++) {
-        vec4 ray_data = imageLoad(farProbes, getRayPos(probe_id, ray_id * 4 + i, probes_per_side, ray_per_side));
-        colorData += ray_data.xyz;
-    }
-    return colorData;
+vec4 getFarProbeRayData(ivec2 probe_id, int ray_id, int sub_ray, int probes_per_side, int ray_per_side) {
+    vec4 ray_data = imageLoad(farProbes, getRayPos(probe_id, ray_id * 4 + sub_ray, probes_per_side, ray_per_side));
+    return ray_data;
 }
 
 bool raycast_visibility(vec2 start, vec2 end, float max_travel) {
@@ -54,6 +50,7 @@ void main() {
     ivec2 invocation = ivec2(gl_GlobalInvocationID.xy);
 
     if (max(invocation.x, invocation.y) >= int(num_probs.x) * sqrt(ray_count) || sdf_res.x == 0) {
+        imageStore(nearProbes, invocation, vec4(1.));
         return;
     }
 
@@ -71,12 +68,10 @@ void main() {
     int far_ray_per_side = ray_tex_side << 1;
 
     vec4 near_ray_data = imageLoad(nearProbes, invocation);
-    if (near_ray_data.a != 0.) {
-        return;
-    }
 
     ivec2 inner_probe_coords = ivec2((near_probe_id.x - 1) % 2, (near_probe_id.y - 1) % 2);
 
+    vec4 merged = vec4(0.);
     for (int y = 0; y < 2; y++) {
         for (int x = 0; x < 2; x++) {
             // Check if probes can see each other
@@ -92,15 +87,24 @@ void main() {
 
             float weight_x = x == inner_probe_coords.x ? 0.75 : 0.25;
             float weight_y = y == inner_probe_coords.y ? 0.75 : 0.25;
-            vec3 farProbeData = getFarProbeRayData(
-                    far_probe_id + ivec2(x, y),
-                    near_ray_id,
-                    far_probes_per_side,
-                    far_ray_per_side
-                );
-            near_ray_data.xyz += farProbeData * weight_x * weight_y * 0.25;
+
+            // Per ray
+            vec4 radiance = vec4(0.);
+            for (int i = 0; i < 4; i++) {
+                vec4 far_probe_ray = getFarProbeRayData(
+                        far_probe_id + ivec2(x, y),
+                        near_ray_id,
+                        i,
+                        far_probes_per_side,
+                        far_ray_per_side
+                    );
+                radiance.xyz += (near_ray_data.xyz + (far_probe_ray.xyz * near_ray_data.a)) * weight_x * weight_y;
+                radiance.a += near_ray_data.a * far_probe_ray.a * weight_x * weight_y;
+            }
+
+            merged += radiance / 4.;
         }
     }
 
-    imageStore(nearProbes, invocation, near_ray_data);
+    imageStore(nearProbes, invocation, merged);
 }

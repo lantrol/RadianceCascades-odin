@@ -22,9 +22,9 @@ GRID_SIZE :: 100
 
 // Cascade Probes Parameters
 
-CASCADE_AMOUNT :: 9
-PROBE_RENDER :: true
-C0_RAY_COUNT :: 4
+CASCADE_AMOUNT :: 8
+PROBE_RENDER :: false
+C0_RAY_COUNT :: 16
 MAX_RAY_ANGLE :: 2 * math.PI / C0_RAY_COUNT
 MIN_PROBE_RES :: 512
 MIN_RAY_SIZE :: (2. / f32(MIN_PROBE_RES)) / 2
@@ -137,7 +137,7 @@ main :: proc() {
 	)
 	defer rc_delete(&rcContext)
 
-	color: []f32 = {1., 1., 1.}
+	color: []f32 = {0.9, 0.9, 0.9}
 	debugRender: enum {
 		field,
 		draw,
@@ -155,12 +155,13 @@ main :: proc() {
 
 		// Color change
 		if crgl.is_key_just_pressed(sdl.K_1) {
-			color = {1., 1., 1.}
+			color = {0.9, 0.9, 0.9}
 		}
 		if crgl.is_key_just_pressed(sdl.K_2) {
 			color = {0, 0, 0}
-		};if crgl.is_key_just_pressed(sdl.K_3) {
-			color = {10., 0.15, 0.15}
+		}
+		if crgl.is_key_just_pressed(sdl.K_3) {
+			color = {2., 0.15, 0.15}
 		}
 
 		start_time := time.tick_now()
@@ -169,7 +170,9 @@ main :: proc() {
 		gl.Clear(gl.COLOR_BUFFER_BIT)
 
 		// Handle field drawing
-		rc_draw_handle(rcContext, color, draw_prog)
+		if !crgl.gui_in_window() {
+			rc_draw_handle(rcContext, color, draw_prog)
+		}
 
 		// SDF calc
 		//rc_calculate_sdf(&rcContext, floodfill)
@@ -202,13 +205,16 @@ main :: proc() {
 
 		gl.LineWidth(2)
 		gl.PointSize(2)
-		// if PROBE_RENDER {
-		// 	for i: i32 = 0; i < CASCADE_AMOUNT; i += 1 {
-		// 		drawCascade(rcContext, i, render_probe)
-		// 	}
-		// }
+		if PROBE_RENDER {
+			// for i: i32 = 0; i < CASCADE_AMOUNT; i += 1 {
+			// 	drawCascade(rcContext, i, render_probe)
+			// }
+			drawCascade(rcContext, 0, render_probe)
+			drawCascade(rcContext, 1, render_probe)
+		}
 
-		gl.Finish()
+
+		//gl.Finish()
 		duration := time.tick_since(start_time)
 		{
 			crgl.gui_begin_window("Debug", alpha = 0.9)

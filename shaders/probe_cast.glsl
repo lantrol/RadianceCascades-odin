@@ -1,6 +1,6 @@
 #version 450 core
 
-layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 #define M_PI 3.1415926535897932384626433832795
 

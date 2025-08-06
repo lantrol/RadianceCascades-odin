@@ -22,12 +22,12 @@ GRID_SIZE :: 100
 
 // Cascade Probes Parameters
 
-CASCADE_AMOUNT :: 8
+CASCADE_AMOUNT :: 5
 PROBE_RENDER :: false
-C0_RAY_COUNT :: 16
+C0_RAY_COUNT :: 4
 MAX_RAY_ANGLE :: 2 * math.PI / C0_RAY_COUNT
-MIN_PROBE_RES :: 512
-MIN_RAY_SIZE :: (2. / f32(MIN_PROBE_RES)) / 2
+MIN_PROBE_RES :: 256
+MIN_RAY_SIZE :: (2. / f32(MIN_PROBE_RES)) / 1.6
 //MIN_SIZE :: 1. / 10.
 //MIN_PROBE_DISTANCE :: MIN_SIZE / MAX_RAY_ANGLE
 
@@ -50,12 +50,6 @@ main :: proc() {
 
 	font, ok := crgl.font_atlas_from_file("./crumbsgl/fonts/Comic Sans MS.ttf", i32(' '), i32('~'))
 	crgl.gui_set_font(font)
-
-	// Empty vao to enable rendering with DSA
-	emptyVao: u32
-	gl.GenVertexArrays(1, &emptyVao)
-	gl.BindVertexArray(emptyVao)
-	defer gl.DeleteBuffers(1, &emptyVao)
 
 	// ------Shader Load-------
 
@@ -80,39 +74,15 @@ main :: proc() {
 	}
 	defer gl.DeleteProgram(screen_sh)
 
-	draw_prog, comp_ok := gl.load_compute_file("shaders/draw.glsl")
-	if !comp_ok {
-		os.exit(-1)
-	}
-	defer gl.DeleteProgram(draw_prog)
-
-	floodfill, flood_ok := gl.load_compute_file("shaders/jumpflood.glsl")
-	if !flood_ok {
-		os.exit(-1)
-	}
-	defer gl.DeleteProgram(floodfill)
-
-	probe_cast, probe_ok := gl.load_compute_file("shaders/probe_cast.glsl")
-	if !probe_ok {
-		os.exit(-1)
-	}
-	defer gl.DeleteProgram(probe_cast)
-
 	render_probe, rend_ok := gl.load_shaders_file("shaders/draw_probe.vs", "shaders/draw_probe.fs")
 	if !rend_ok {
 		os.exit(-1)
 	}
 	defer gl.DeleteProgram(render_probe)
 
-	probe_to_field, ptf_ok := gl.load_compute_file("shaders/probe_to_field.glsl")
-	if !ptf_ok {
-		os.exit(-1)
-	}
+	rc_load_shaders()
 
-	probe_merge, merge_ok := gl.load_compute_file("shaders/probe_merge.glsl")
-	if !merge_ok {
-		os.exit(-1)
-	}
+	fmt.println(gRCShaders)
 
 	// ---------------
 	drawTarget := crgl.createTarget(SCREEN_SIZE, SCREEN_SIZE, gl.RGBA32F)
@@ -140,7 +110,6 @@ main :: proc() {
 	color: []f32 = {0.9, 0.9, 0.9}
 	debugRender: enum {
 		field,
-		draw,
 		sdf,
 		cascade,
 	} = .field
@@ -150,7 +119,7 @@ main :: proc() {
 		if crgl.is_key_just_pressed(sdl.K_ESCAPE) do break loop
 		if crgl.has_quit() do break loop
 		if crgl.is_button_just_pressed(.RIGHT) {
-			rc_calculate_sdf(&rcContext, floodfill)
+			rc_calculate_sdf(&rcContext)
 		}
 
 		// Color change
@@ -161,7 +130,7 @@ main :: proc() {
 			color = {0, 0, 0}
 		}
 		if crgl.is_key_just_pressed(sdl.K_3) {
-			color = {2., 0.15, 0.15}
+			color = {0.9, 0.1, 0.1}
 		}
 
 		start_time := time.tick_now()
@@ -171,20 +140,20 @@ main :: proc() {
 
 		// Handle field drawing
 		if !crgl.gui_in_window() {
-			rc_draw_handle(rcContext, color, draw_prog)
+			rc_draw_handle(rcContext, color)
 		}
 
 		// SDF calc
 		//rc_calculate_sdf(&rcContext, floodfill)
 
 		// Raycast from probes with SDFs
-		rc_calculate_cascades(rcContext, probe_cast)
+		rc_calculate_cascades(rcContext)
 
 		// Cascades merging
-		rc_merge_cascades(rcContext, probe_merge)
+		rc_merge_cascades(rcContext)
 
 		// Probe to field
-		rc_calculate_field(rcContext, probe_to_field)
+		rc_calculate_field(rcContext)
 
 		// Draw
 		crgl.unbindTargets()
@@ -193,8 +162,6 @@ main :: proc() {
 		switch debugRender {
 		case .field:
 			crgl.renderMesh(screen, screen_sh, rcContext.field)
-		case .draw:
-			crgl.renderMesh(screen, screen_sh, rcContext.draw)
 		case .sdf:
 			crgl.setUniform(show_sdf_sh, "screen_size", f32(SCREEN_SIZE))
 			crgl.setUniform(show_sdf_sh, "range", f32(0.01))
@@ -202,6 +169,8 @@ main :: proc() {
 		case .cascade:
 			crgl.renderMesh(screen, screen_sh, rcContext.cascades[0])
 		}
+
+		crgl.renderMesh(screen, screen_sh, rcContext.draw)
 
 		gl.LineWidth(2)
 		gl.PointSize(2)
@@ -223,9 +192,6 @@ main :: proc() {
 
 			if crgl.gui_button("Render field") {
 				debugRender = .field
-			}
-			if crgl.gui_button("Render draw") {
-				debugRender = .draw
 			}
 			if crgl.gui_button("Render sdf") {
 				debugRender = .sdf

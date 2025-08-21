@@ -261,6 +261,23 @@ gui_text :: proc(args: ..any) {
 	activeWindow.textCount += 1
 }
 
+gui_textf :: proc(text: string, args: ..any) {
+	if activeWindow.hidden do return
+	if activeWindow.textCount == len(guiTextArray) {
+		fmt.println("Error: max text count reached")
+		return
+	}
+	text := fmt.tprintf(text, ..args)
+
+	x: i32 = activeWindow.x + gGuiOptions.vpadding
+	y: i32 = activeWindow.y + gGuiOptions.topBarHeight + activeWindow.voffset
+	bboxWidth, bboxHeight := font_get_text_bbox(gGuiOptions.font, text, gGuiOptions.textScale)
+
+	activeWindow.voffset += i32(bboxHeight) + gGuiOptions.vpadding
+	guiTextArray[activeWindow.textCount] = GuiText{text, x, y}
+	activeWindow.textCount += 1
+}
+
 @(private)
 gui_vertex_from_rect :: proc(rect: GuiRect) -> [6]GuiVertex {
 	windX, windY: i32

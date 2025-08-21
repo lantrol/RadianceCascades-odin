@@ -12,17 +12,14 @@ import crgl "crumbsgl"
 import gl "vendor:OpenGL"
 import sdl "vendor:sdl3"
 
-VSYNC :: 1
+VSYNC :: 0
 GL_VERSION_MAJOR :: 4
 GL_VERSION_MINOR :: 5
-SCREEN_SIZE :: 1024
-
-// Grid parameters
-GRID_SIZE :: 100
+SCREEN_SIZE :: 900
 
 // Cascade Probes Parameters
 
-CASCADE_AMOUNT :: 5
+CASCADE_AMOUNT :: 6
 PROBE_RENDER :: false
 C0_RAY_COUNT :: 4
 MAX_RAY_ANGLE :: 2 * math.PI / C0_RAY_COUNT
@@ -32,7 +29,6 @@ MIN_RAY_SIZE :: (2. / f32(MIN_PROBE_RES)) / 1.6
 //MIN_PROBE_DISTANCE :: MIN_SIZE / MAX_RAY_ANGLE
 
 main :: proc() {
-	fmt.println(MIN_RAY_SIZE)
 	window, wind_ok := crgl.windowInit(
 		SCREEN_SIZE,
 		SCREEN_SIZE,
@@ -47,6 +43,8 @@ main :: proc() {
 
 	gl.Enable(gl.BLEND)
 	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+
+	sdl.GL_SetSwapInterval(VSYNC)
 
 	font, ok := crgl.font_atlas_from_file("./crumbsgl/fonts/Comic Sans MS.ttf", i32(' '), i32('~'))
 	crgl.gui_set_font(font)
@@ -81,8 +79,6 @@ main :: proc() {
 	defer gl.DeleteProgram(render_probe)
 
 	rc_load_shaders()
-
-	fmt.println(gRCShaders)
 
 	// ---------------
 	drawTarget := crgl.createTarget(SCREEN_SIZE, SCREEN_SIZE, gl.RGBA32F)
@@ -183,12 +179,12 @@ main :: proc() {
 		}
 
 
-		//gl.Finish()
+		gl.Finish()
 		duration := time.tick_since(start_time)
 		{
 			crgl.gui_begin_window("Debug", alpha = 0.9)
 
-			crgl.gui_text("FPS: ", 1. / time.duration_seconds(duration))
+			crgl.gui_textf("FPS: {:6.2f}", 1. / time.duration_seconds(duration))
 
 			if crgl.gui_button("Render field") {
 				debugRender = .field
